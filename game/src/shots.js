@@ -1,79 +1,51 @@
-// The screenshot scenes behind ?shot=start|play|end. Each one plays the real rules forward from a
-// fresh world for a fixed number of steps, steered by a simple autopilot (look ahead each way the
-// paddle could move, keep clear of blocks, chase the lowest coin when that is safe), so the frame
-// is what a short game really looks like and the same seed always gives the same frame.
-import { FIELD, PLAYER, STEP } from './config.js';
-import { EVENT_OVER, KIND_BLOCK } from './world.js';
-import { SCREEN_OVER, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
+// The 4 screenshot scenes behind ?shot=1..4. Each one stages a real game
+// state (real systems, real HUD) and then lets the loop run it forward with
+// scripted inputs for a fixed number of frames, so the frame is what a short
+// stretch of actual play looks like. The loop sets window.__shotReady when
+// the scene has settled.
+export function stageShot(G, name) {
+  const { input, player, missions, police } = G;
+  const holdW = () => input._testDown('KeyW');
 
-const START_SECONDS = 5;
-const PLAY_SECONDS = 26;
-const END_LIMIT_SECONDS = 600;
-/**
- * How far ahead, in seconds, the autopilot checks each way it could move: the play scene's pilot
- * looks well ahead and keeps all its lives; the end scene's looks only a moment ahead, so it is
- * caught out once the blocks speed up, as a hurried player is.
- */
-const HORIZON_PLAY = 0.7;
-const HORIZON_END = 0.25;
-const SAMPLE = 1 / 30;
-const DIRECTIONS = [0, -1, 1];
-/** Extra room, each side, it keeps between the paddle and a block. */
-const MARGIN = 10;
-
-/** Seconds until moving in `direction` (-1, 0, 1) runs the paddle into a block; Infinity when it never does. */
-function timeToHit(state, direction, horizon) {
-  const player = state.player;
-  for (let t = SAMPLE; t <= horizon; t += SAMPLE) {
-    const x = Math.min(FIELD.width - player.width, Math.max(0, player.x + direction * PLAYER.speed * t));
-    for (let index = 0; index < state.items.length; index += 1) {
-      const item = state.items[index];
-      if (!item.active || item.kind !== KIND_BLOCK) continue;
-      const y = item.y + item.speed * t;
-      if (y + item.height > player.y && y < player.y + player.height && item.x < x + player.width + MARGIN && item.x + item.width > x - MARGIN) return t;
-    }
+  if (name === '1') {
+    // Cover — police chase: red sports car at speed down the beach boulevard,
+    // two police cars on its tail, 3 stars, courier mission live, sun ahead.
+    G.startDriving('sports', -60, 110, Math.PI / 2);
+    G.car.mesh.children[0].material.color.setHex(0xc62828);
+    police.setHeat(61);
+    police.step(0.01, { x: -60, z: 110 }, G.car, 20, false);
+    missions.startMission(1, G.missionHooks);
+    G.shotPoliceGap = 13;
+    holdW();
+    G.shotFrames = 150;
+  } else if (name === '2') {
+    // On foot in the city: Vic on the sidewalk among pedestrians, a taxi at
+    // the curb ahead, storefronts and palms, downtown behind him.
+    player.x = -15.5; player.z = 30; player.heading = Math.PI; player.camYaw = Math.PI;
+    player.mesh.position.set(player.x, 0, player.z);
+    G.spawnParkedTaxi(-24.2, 22, Math.PI);
+    G.peds.spawn(-15.5, 20);
+    G.peds.spawn(-14, 14);
+    G.peds.spawn(-17, 10);
+    G.peds.spawn(-15, 24);
+    G.shotFrames = 40;
+  } else if (name === '3') {
+    // Mission in progress: sunset, driving for the marina gate on the final
+    // job, a police car in the distance, waypoint beacon ahead.
+    G.setTimeOfDay('sunset');
+    G.startDriving('sedan', 75, 22, Math.PI / 2);
+    G.car.mesh.children[0].material.color.setHex(0xc62828);
+    missions.startMission(4, G.missionHooks);
+    police.setHeat(22);
+    police.step(0.01, { x: 75, z: 22 }, G.car, 20, false);
+    G.shotPoliceGap = 30;
+    G.shotPoliceMode = 'ahead';
+    holdW();
+    G.shotFrames = 70;
+  } else {
+    // Title screen: the city behind the menu, slow orbit.
+    G.mode = 'title';
+    G.shotFrames = 90;
   }
-  return Infinity;
-}
-
-/** Of the safe ways to move, the one toward the lowest coin (or the centre); else the one that is hit last. */
-function autopilot(state, horizon) {
-  const player = state.player;
-  let coin = null;
-  for (let index = 0; index < state.items.length; index += 1) {
-    const item = state.items[index];
-    if (item.active && item.kind !== KIND_BLOCK && (coin === null || item.y > coin.y)) coin = item;
-  }
-  const target = coin === null ? FIELD.width / 2 : coin.x + coin.width / 2;
-  const centre = player.x + player.width / 2;
-  const wanted = target > centre + 8 ? 1 : target < centre - 8 ? -1 : 0;
-  let best = wanted;
-  let bestTime = timeToHit(state, wanted, horizon);
-  for (let index = 0; index < DIRECTIONS.length && bestTime !== Infinity; index += 1) {
-    const time = timeToHit(state, DIRECTIONS[index], horizon);
-    if (time > bestTime) {
-      bestTime = time;
-      best = DIRECTIONS[index];
-    }
-  }
-  return best;
-}
-
-/**
- * Set `world` to the named scene (start, play or end; any other name is start) and return the
- * screen to draw over it and the best score to show.
- */
-export function stageShot(name, world) {
-  world.reset();
-  if (name !== 'play' && name !== 'end') {
-    for (let index = 0; index < START_SECONDS / STEP; index += 1) world.step(STEP, 0, true);
-    return { screen: SCREEN_TITLE, best: 0 };
-  }
-  const limit = name === 'end' ? END_LIMIT_SECONDS : PLAY_SECONDS;
-  const horizon = name === 'end' ? HORIZON_END : HORIZON_PLAY;
-  for (let index = 0; index < limit / STEP; index += 1) {
-    if (world.step(STEP, autopilot(world.state, horizon), false) & EVENT_OVER) break;
-  }
-  const over = world.state.lives === 0;
-  return { screen: over ? SCREEN_OVER : SCREEN_PLAY, best: world.state.score };
+  G.shotCountdown = G.shotFrames;
 }
