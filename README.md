@@ -1,8 +1,8 @@
 # Solmar City — an open-world crime game
 
-![gta6-01](https://make.fun/badge/gta6-01.svg)
-![rank](https://make.fun/badge/gta6-01/jehan771/gta6-01/rank.svg)
-![reward](https://make.fun/badge/gta6-01/jehan771/gta6-01/reward.svg)
+[![make.fun · gta6-01](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![rank](https://make.fun/badge/gta6-01/jehan771/gta6-01/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![reward](https://make.fun/badge/gta6-01/jehan771/gta6-01/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
 
 **Solmar City** is a 3D open-world crime game for the make.fun **gta6-01 "Make GTA 6"**
 bounty. Vic Marino, a getaway driver, owes a loan shark $1,500 — Rosa Delgado's five
