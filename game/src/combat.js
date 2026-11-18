@@ -1,137 +1,161 @@
-// Combat — fists on foot (F), pistol (2 to draw, click to fire), ammo
-// pickups, muzzle flash, and the armed gunmen Mission 5 spawns. Shooting is
-// a raycast from the camera; enemies return fire when the player is close.
+// Combat: bare fists and a pistol, ammo boxes around the city, and the
+// armed loan-shark crew that missions 5 and 7 spawn. A shot is a raycast
+// from the camera; the crew shoots back when Vic gets close.
 import * as THREE from 'three';
-import { CFG } from './config.js';
-import { range } from './random.js';
+import { COMBAT, WANTED } from './config.js';
+import { range, pick } from './random.js';
 
-export function createCombat(scene, rng) {
+export function createCombat(G) {
+  const rng = G.rng;
   const enemies = [];
-  const pickups = [];
-  const flash = new THREE.PointLight(0xffcc66, 0, 12);
-  scene.add(flash);
-  let flashTimer = 0;
+  const raycaster = new THREE.Raycaster();
 
-  // Tracer line shown briefly when a shot is fired.
-  const tracerGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
-  const tracer = new THREE.Line(tracerGeo, new THREE.LineBasicMaterial({ color: 0xffe08a, transparent: true, opacity: 0 }));
-  scene.add(tracer);
-
-  function makeGunman(x, z) {
-    const g = new THREE.Group();
-    const body = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.85, 0.42), new THREE.MeshLambertMaterial({ color: 0x222222 }));
-    body.position.y = 1.15; g.add(body);
-    const head = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.42, 0.42), new THREE.MeshLambertMaterial({ color: 0x8a5a3b }));
-    head.position.y = 1.8; g.add(head);
-    const gun = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.14, 0.45), new THREE.MeshLambertMaterial({ color: 0x111111 }));
-    gun.position.set(0.4, 1.1, 0.3); g.add(gun);
-    g.position.set(x, 0, z);
-    scene.add(g);
-    const e = { mesh: g, x, z, hp: 100, alive: true, shootCd: range(rng, 0.5, 1.5) };
-    enemies.push(e);
-    return e;
+  // Green ammo boxes scattered near the roads.
+  const ammoBoxes = [];
+  const ammoSpots = [
+    { x: -22, z: 30 }, { x: 66, z: -22 }, { x: -66, z: 66 }, { x: 22, z: -66 },
+    { x: 110, z: -22 }, { x: -110, z: -66 }, { x: 44, z: 110 }, { x: -44, z: -110 },
+  ];
+  for (const spot of ammoSpots) {
+    const mesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.8, 0.5, 0.8),
+      new THREE.MeshLambertMaterial({ color: 0x2fae4e, emissive: 0x0a3313 }),
+    );
+    mesh.position.set(spot.x, 0.25, spot.z);
+    G.scene.add(mesh);
+    ammoBoxes.push({ mesh, x: spot.x, z: spot.z, taken: false });
   }
 
-  function spawnAmmo(x, z) {
-    const box = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.4, 0.6), new THREE.MeshLambertMaterial({ color: 0x2e7d32 }));
-    box.position.set(x, 0.35, z);
-    scene.add(box);
-    pickups.push({ mesh: box, x, z, taken: false, kind: 'ammo' });
+  function spawnCrew(spots) {
+    for (const spot of spots) {
+      const group = new THREE.Group();
+      const body = new THREE.Mesh(
+        new THREE.BoxGeometry(0.7, 1.0, 0.4),
+        new THREE.MeshLambertMaterial({ color: 0x4a1f1f }),
+      );
+      body.position.y = 1.05;
+      group.add(body);
+      const head = new THREE.Mesh(
+        new THREE.SphereGeometry(0.28, 10, 8),
+        new THREE.MeshLambertMaterial({ color: 0xc9976b }),
+      );
+      head.position.y = 1.78;
+      group.add(head);
+      const gun = new THREE.Mesh(
+        new THREE.BoxGeometry(0.12, 0.12, 0.6),
+        new THREE.MeshLambertMaterial({ color: 0x111111 }),
+      );
+      gun.position.set(0.4, 1.1, 0.3);
+      group.add(gun);
+      group.position.set(spot.x, 0, spot.z);
+      G.scene.add(group);
+      enemies.push({
+        group, pos: group.position, health: 100, shootTimer: range(rng, 0.5, 1.5),
+      });
+    }
   }
-  // Ammo boxes at fixed, memorable spots.
-  for (const [x, z] of [[-20, 42], [24, -20], [-64, -64], [64, 64], [110, -22], [-110, 66]]) spawnAmmo(x, z);
 
-  return {
-    enemies, pickups,
-    spawnGunmen(spots) { for (const [x, z] of spots) makeGunman(x, z); },
-    clearEnemies() {
-      for (const e of enemies) { scene.remove(e.mesh); e.alive = false; }
-      enemies.length = 0;
-    },
-    // Fire the pistol from `origin` along `dir`. Returns the enemy hit (if any).
-    shoot(origin, dir, colliders) {
-      const ray = new THREE.Raycaster(origin, dir, 0.1, 120);
-      let best = null, bestD = Infinity;
-      for (const e of enemies) {
-        if (!e.alive) continue;
-        const toE = new THREE.Vector3(e.x - origin.x, 1.2 - origin.y, e.z - origin.z);
-        const d = toE.length();
-        const along = toE.dot(dir);
-        if (along > 0 && along < bestD) {
-          const perp = toE.clone().addScaledVector(dir, -along).length();
-          if (perp < 1.1) { best = e; bestD = along; }
+  function removeEnemy(enemy) {
+    G.scene.remove(enemy.group);
+    enemies.splice(enemies.indexOf(enemy), 1);
+  }
+
+  // A punch: 25 damage to the nearest person in front, within 2.2 m.
+  function punch() {
+    G.lastPunchAt = G.time;
+    const p = G.player;
+    const fx = Math.sin(p.yaw);
+    const fz = Math.cos(p.yaw);
+    let best = null;
+    let bestD = COMBAT.punchRange;
+    const consider = (pos, kind, ref) => {
+      const dx = pos.x - p.pos.x;
+      const dz = pos.z - p.pos.z;
+      const d = Math.hypot(dx, dz);
+      if (d < bestD && dx * fx + dz * fz > 0) { best = { kind, ref }; bestD = d; }
+    };
+    for (const e of enemies) consider(e.pos, 'enemy', e);
+    for (const ped of G.pedestrians.peds) consider(ped.pos, 'ped', ped);
+    if (!best) return false;
+    if (best.kind === 'enemy') {
+      damageEnemy(best.ref, COMBAT.punchDamage);
+    } else {
+      G.police.addHeat(WANTED.hitPed, 'You hit a pedestrian!');
+    }
+    return true;
+  }
+
+  function damageEnemy(enemy, amount) {
+    enemy.health -= amount;
+    if (enemy.health <= 0) {
+      removeEnemy(enemy);
+      G.hudMessage('Crew member down.');
+    }
+  }
+
+  // Fire the pistol along a ray from the camera through a world point
+  // (the mouse click, or a debug aim). Hits the first enemy near the ray.
+  function firePistolAt(point) {
+    const p = G.player;
+    if (p.weapon !== 'pistol' || p.ammo <= 0) return false;
+    p.ammo -= 1;
+    G.lastShotAt = G.time;
+    G.audio.gunshot();
+    const from = G.camera.position.clone();
+    const dir = point.clone().sub(from).normalize();
+    raycaster.set(from, dir);
+    raycaster.far = 300;
+    let best = null;
+    let bestDist = Infinity;
+    for (const enemy of enemies) {
+      const centre = enemy.pos.clone();
+      centre.y = 1.2;
+      const toEnemy = centre.clone().sub(from);
+      const along = toEnemy.dot(dir);
+      if (along < 0 || along > 300) continue;
+      const closest = from.clone().add(dir.clone().multiplyScalar(along));
+      if (closest.distanceTo(centre) < 1.6 && along < bestDist) {
+        best = enemy;
+        bestDist = along;
+      }
+    }
+    if (best) {
+      damageEnemy(best, COMBAT.pistolDamage);
+      G.audio.hitMarker();
+    }
+    G.police.addHeat(WANTED.shoot);
+    return true;
+  }
+
+  function update(dt) {
+    // Ammo boxes: walk within 2.5 m to pick up 12 rounds.
+    for (const box of ammoBoxes) {
+      if (box.taken) continue;
+      const d = Math.hypot(box.x - G.player.pos.x, box.z - G.player.pos.z);
+      if (d < 2.5) {
+        box.taken = true;
+        box.mesh.visible = false;
+        G.player.ammo = Math.min(COMBAT.ammoMax, G.player.ammo + COMBAT.ammoBox);
+        G.hudMessage(`Ammo +${COMBAT.ammoBox}`);
+      }
+    }
+    // The crew shoots back when Vic is near.
+    for (const enemy of [...enemies]) {
+      const d = Math.hypot(enemy.pos.x - G.player.pos.x, enemy.pos.z - G.player.pos.z);
+      enemy.shootTimer -= dt;
+      if (d < 45 && enemy.shootTimer <= 0) {
+        enemy.shootTimer = 1.5;
+        enemy.group.lookAt(G.player.pos.x, 1.2, G.player.pos.z);
+        G.player.health -= 5;
+        G.lastDamageAt = G.time;
+        G.audio.enemyShot();
+        if (G.player.health <= 0) {
+          G.player.health = 100;
+          G.hudMessage('Vic got shot up — back on his feet, but the crew is still there.');
         }
       }
-      // Buildings block shots: if a building AABB is crossed before the enemy, miss.
-      if (best) {
-        for (const c of colliders) {
-          // Cheap test: sample the ray; a hit inside a building box before the enemy blocks it.
-          for (let t = 2; t < bestD; t += 2) {
-            const px = origin.x + dir.x * t, pz = origin.z + dir.z * t;
-            if (px > c.minX && px < c.maxX && pz > c.minZ && pz < c.maxZ) { best = null; break; }
-          }
-          if (!best) break;
-        }
-      }
-      const end = best
-        ? new THREE.Vector3(best.x, 1.2, best.z)
-        : origin.clone().addScaledVector(dir, 60);
-      tracerGeo.setFromPoints([origin.clone(), end]);
-      tracer.material.opacity = 0.9;
-      flash.position.copy(origin).addScaledVector(dir, 1.2);
-      flash.intensity = 60; flashTimer = 0.07;
-      if (best) {
-        best.hp -= CFG.pistolDamage;
-        if (best.hp <= 0) { best.alive = false; best.mesh.visible = false; }
-      }
-      return best;
-    },
-    // A punch: anything in a short arc in front takes damage.
-    punch(px, pz, heading) {
-      const fx = Math.sin(heading), fz = Math.cos(heading);
-      for (const e of enemies) {
-        if (!e.alive) continue;
-        const dx = e.x - px, dz = e.z - pz;
-        const d = Math.hypot(dx, dz);
-        if (d < CFG.punchRange && dx * fx + dz * fz > 0) {
-          e.hp -= CFG.punchDamage;
-          if (e.hp <= 0) { e.alive = false; e.mesh.visible = false; }
-          return e;
-        }
-      }
-      return null;
-    },
-    step(dt, playerPos, onDamage) {
-      if (flashTimer > 0) { flashTimer -= dt; if (flashTimer <= 0) flash.intensity = 0; }
-      tracer.material.opacity = Math.max(0, tracer.material.opacity - dt * 8);
-      // Gunmen stand their ground and shoot when the player is near.
-      for (const e of enemies) {
-        if (!e.alive) continue;
-        const d = Math.hypot(e.x - playerPos.x, e.z - playerPos.z);
-        e.mesh.lookAt(playerPos.x, 0, playerPos.z);
-        e.shootCd -= dt;
-        if (d < 26 && e.shootCd <= 0) {
-          e.shootCd = range(rng, 1.2, 2.2);
-          // Rough aim: hits about a third of the time at close range.
-          if (Math.random() < 0.35) onDamage(7);
-          const from = new THREE.Vector3(e.x, 1.3, e.z);
-          const to = new THREE.Vector3(playerPos.x, 1.2, playerPos.z);
-          const dir = to.clone().sub(from).normalize();
-          tracerGeo.setFromPoints([from, to]);
-          tracer.material.opacity = 0.7;
-        }
-      }
-      // Ammo pickups bob and spin.
-      for (const pk of pickups) {
-        if (pk.taken) continue;
-        pk.mesh.rotation.y += dt * 2;
-        pk.mesh.position.y = 0.35 + Math.sin(performance.now() / 400 + pk.x) * 0.08;
-        const d = Math.hypot(pk.x - playerPos.x, pk.z - playerPos.z);
-        if (d < 1.6) {
-          pk.taken = true; pk.mesh.visible = false;
-          onDamage(0, 'ammo');
-        }
-      }
-    },
-  };
+    }
+  }
+
+  return { enemies, ammoBoxes, spawnCrew, punch, firePistolAt, damageEnemy, update };
 }
